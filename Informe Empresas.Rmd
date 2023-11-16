@@ -1,0 +1,298 @@
+---
+title: "ANALISIS DE INDICADORES DE EMPRESAS"
+author: "Veronica Tapia"
+date: "2023-11-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	comment = NA,
+	prompt = FALSE,
+	tidy = TRUE
+)
+opts_knit$set(width=75)
+```
+
+### **INTRODUCCION**
+
+El propósito de este proyecto es examinar y cotejar los parámetros financieros de empresas que están obligadas a llevar registros contables. Esto se logrará mediante el análisis de los datos recabados del Formulario 102 de Declaración de Impuesto a la Renta de personas naturales y sucesiones indivisas. La Superintendencia de Compañías (2009) ha establecido cuatro categorías de indicadores financieros: liquidez, gestión, solvencia y rentabilidad. A través de esta investigación, buscamos comprender las variaciones de estos indicadores en función del tamaño de las empresas, lo que facilitará la toma de decisiones fundamentadas acerca de su desempeño y estabilidad económica.
+
+**Load packages**
+
+Para el desarrollo del proyecto se utilizaron los siguientes paquetes:
+```{r}
+library(openxlsx)
+library(magrittr)
+library(tidyverse)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(rmdformats)
+
+```
+
+
+### **Objetivo General**
+
+Evaluar los indicadores financieros que miden la liquidez y solvencia de empresas categorizadas según su tamaño, estatus y ubicación geográfica.
+
+### **Objetivos específicos**
+1. Realizar un análisis detallado del endeudamiento del activo de microempresas, pequeñas empresas y grandes empresas, determinando sus niveles respectivos.
+
+2. Comparar la liquidez de las empresas clasificadas por el número de trabajadores, identificando patrones y diferencias significativas en sus indicadores financieros.
+
+3. Elaborar un informe detallado que describa las diez empresas con el mayor apalancamiento, destacando los factores que contribuyen a su posición y su impacto en la estabilidad financiera.
+
+### **Database**
+La plataforma de trabajo es balance_2014.xlsx, la cual abarca 347 variables y 47033 registros. Además, se cuenta con otras dos fuentes de datos, denominadas cias y ciiu, que proporcionan la interpretación de las variables de la base principal. Estas bases se cargan utilizando la librería openxlsx y se convierten de un dataframe a un tibble para aprovechar sus mejoras.
+
+```{r echo=TRUE, include=TRUE}
+balance_2014 <- read.xlsx('C:/Users/veroi/Downloads/balances_2014.xlsx')
+ciiu <- read.xlsx('C:/Users/veroi/Downloads/ciiu.xlsx')
+cias <- read.xlsx('C:/Users/veroi/Downloads/cias_codebook.xlsx')
+balance_2014 <- tibble(balance_2014)
+
+```
+
+La base se compone de variables numéricas y categóricas.
+
+```{r}
+balance <- balance_2014 %>%
+  inner_join(ciiu, by = c("ciiu4_nivel1" = "CODIGO")) %>%
+  inner_join(ciiu, by = c("ciiu4_nivel6" = "CODIGO")) %>%
+  mutate(liquidez_corriente = v345 / v539, endeu_activo = v599 / v499,
+         ende_patrimo = v599 / v698, ende_activo_fijo = v698 / v498,
+         apalancamiento = v499 / v698) %>%
+  rename(actividad = DESCRIPCION.x,
+         subactividad = DESCRIPCION.y) %>%
+  select(nombre_cia, situacion, tipo, pais, provincia, canton, ciudad, fecha_const,
+         tamanio, actividad, subactividad, trab_direc, trab_admin,
+         liquidez_corriente, endeu_activo, ende_patrimo,
+         ende_activo_fijo, apalancamiento) %>%
+  mutate(actividad = as.factor(actividad),
+         subactividad = as.factor(subactividad),
+         situacion = as.factor(situacion),
+         tipo = as.factor(tipo))
+df <- read.xlsx('C:\\Users\\veroi\\Downloads\\Variables.xlsx')
+kable(df, caption = "",
+      align = c('l', 'c', 'l'),
+      col.names = c("Variable", "Descripción", "Tipo"),
+      row.names = TRUE,
+      digits = 1,
+      format.args = list(decimal.mark = ",")
+)
+```
+
+Utilizando la información recopilada en la base de datos, generamos una tabla que nos proporciona el conteo total de empresas según su actividad económica y distribución por actividad económica en cada cantón.
+
+```{r}
+# Total de empresas por actividad y canton
+empresas_por_canton <- balance %>%
+  group_by(actividad, canton) %>%
+  summarise(total_empresas = n()) %>%
+  view("base2")
+
+# Total empresas por canton
+balance %>%
+  group_by(canton) %>%
+  summarise(total_empresas = n()) %>%
+  view("base2")
+```
+
+Guayaquil y Quito tienen la mayoría de empresas.
+Entre las actividades economicas que mas destacan, tenemos: Comercio (G), Inmobiliarias (L), Actividades Profesionales (M), Industria de Manufactura (C), Agricultura (A) y Construcción (F).
+
+### Depurar la base
+
+```{r}
+cantidad_de_NA <- sum(is.na(balance))
+cantidad_de_NA
+```
+
+```{r}
+finitos <- function(data, columna) {
+  data_filtrado <- data[is.finite(data[[columna]]), ]
+  return(data_filtrado)
+}
+```
+
+```{r}
+balance<-finitos(balance,"liquidez_corriente") 
+balance<-finitos(balance,"apalancamiento") 
+balance<-finitos(balance,"endeu_activo") 
+balance<-finitos(balance,"ende_patrimo") 
+balance<-finitos(balance,"ende_activo_fijo") 
+colSums(is.na(balance))
+```
+
+### Indicadores Financieros
+En esta sección se exhibe de manera gráfica la comparación de los indicadores financieros de liquidez y solvencia según la situación activa y la provincia. Se procedió a la creación de la base de datos "activas", en la cual se identificaron valores atípicos que fueron corregidos mediante la aplicación de una función, obtenida de fuentes en línea, con el fin de mejorar la integridad de los datos.
+```{r}
+attach(balance)
+
+activas <- balance %>%
+  filter(situacion == "ACTIVA")
+impute_outliers <- function(x, removeNA = TRUE) {
+  quantiles <- quantile(x, c(0.05, 0.95), na.rm = removeNA)
+  x[x < quantiles[1]] <- mean(x, na.rm = removeNA)
+  x[x > quantiles[2]] <- median(x, na.rm = removeNA)
+  x
+}
+activas$liquidez_corriente <- impute_outliers(activas$liquidez_corriente)
+```
+
+En el estudio, estamos investigando cómo la fecha de establecimiento de empresas, cuando las agrupamos por provincia, se relaciona con la liquidez corriente. La liquidez corriente, que evalúa la capacidad de una empresa para cubrir sus deudas a corto plazo con activos convertibles en efectivo en un año, nos proporciona información valiosa sobre la estabilidad financiera a corto plazo de estas empresas.
+```{r}
+plot(activas$liquidez_corriente)
+ggplot(activas, aes(x = fecha_const, y = liquidez_corriente, color = provincia, group = provincia)) +
+  geom_line() +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymin), linetype = "dashed", color = "purple") +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymed), linetype = "dashed", color = "green") +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymax), linetype = "dashed", color = "black") +
+  labs(title = "Comparativo de Indicadores de Liquidez por situacion ACTIVA y provincia",
+       x = "Fecha constitución",
+       y = "Liquidez") +
+  facet_wrap(~provincia) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+
+Podemos notar que en regiones como Guayas, Pichincha y Azuay, se encuentran más empresas con una mayor liquidez, y se puede analizar la concentración de cada una de ellas en términos de sus percentiles.
+De manera similar, podemos examinar el apalancamiento en cada provincia, ya que esta medida se relaciona con el uso de deuda o financiamiento externo para aumentar el rendimiento financiero de una empresa o inversión. En otras palabras, implica tomar prestado dinero con la expectativa de que las actividades en las que se invierte generarán un rendimiento superior al costo de la deuda a largo plazo.
+```{r}
+activas$apalancamiento <- impute_outliers(activas$apalancamiento)
+plot(activas$apalancamiento)
+ggplot(activas, aes(x = fecha_const, y = apalancamiento, color = provincia, group = provincia)) +
+  geom_line() +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymin), linetype = "dashed", color = "purple") +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymed), linetype = "dashed", color = "green") +
+  geom_hline(data = activas %>% group_by(provincia) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymax), linetype = "dashed", color = "black") +
+  labs(title = "Comparativo de Indicadores de Apalancamiento por situacion ACTIVA y provincia",
+       x = "Fecha constitución",
+       y = "Apalancamiento") +
+  facet_wrap(~provincia) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+ggplot(activas, aes(x = fecha_const, y = liquidez_corriente, color = tipo, group = tipo)) +
+  geom_line() +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymin), linetype = "dashed", color = "purple") +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymed), linetype = "dashed", color = "green") +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(liquidez_corriente, 0.25), ymed = median(liquidez_corriente), ymax = quantile(liquidez_corriente, 0.75)),
+             aes(yintercept = ymax), linetype = "dashed", color = "black") +
+  labs(title = "Comparativo de Indicadores de Liquidez por situacion ACTIVA y tipo",
+       x = "Fecha constitución",
+       y = "Liquidez") +
+  facet_wrap(~tipo) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+
+Gráficamente, se puede observar que la mayoría de las empresas se clasifican como de responsabilidad limitada o anónimas. En el caso de las empresas de responsabilidad limitada, se trata de una entidad comercial que fusiona elementos de una sociedad y una corporación. Esto ofrece a los propietarios, también llamados miembros, una protección limitada de responsabilidad similar a la de una corporación, al tiempo que conserva una estructura y flexibilidad operativa semejante a la de una sociedad. Por otro lado, las empresas anónimas, también conocidas como sociedades anónimas (SA), se caracterizan por tener su capital dividido en acciones que pueden ser propiedad de varios accionistas. La característica principal de una empresa anónima radica en la separación entre la propiedad y la gestión. En este modelo, los accionistas son dueños de las acciones y eligen a la junta directiva para que administre y tome decisiones en representación de la empresa. Así, estas empresas pueden hacer frente a desafíos de liquidez y apalancamiento.
+
+```{r}
+ggplot(activas, aes(x = fecha_const, y = apalancamiento, color = tipo, group = tipo)) +
+  geom_line() +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymin), linetype = "dashed", color = "purple") +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymed), linetype = "dashed", color = "green") +
+  geom_hline(data = activas %>% group_by(tipo) %>% summarise(ymin = quantile(apalancamiento, 0.25), ymed = median(apalancamiento), ymax = quantile(apalancamiento, 0.75)),
+             aes(yintercept = ymax), linetype = "dashed", color = "black") +
+  labs(title = "Comparativo de Indicadores de Apalancamiento por situacion ACTIVA y tipo",
+       x = "Fecha constitución",
+       y = "Liquidez") +
+  facet_wrap(~tipo) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+## **Preguntas de Investigacion**
+
+#### **¿El endeudamiento del activo fue mayor en empresas micro + pequeñas vs. grandes?**
+```{r}
+micro_pequeña <- balance %>%
+  filter(tamanio %in% c("MICRO", "PEQUEÑA")) %>%
+  summarise(Promedio1 = mean(endeu_activo))
+micro_pequeña
+
+grande <- balance %>%
+  filter(tamanio %in% c("GRANDE")) %>%
+  summarise(Promedio2 = mean(endeu_activo))
+grande
+
+comparativo <- tibble(Tamaño = c("Micro+Pequeña", "Grande"),
+                      Media = c(micro_pequeña$Promedio1, grande$Promedio2)) %>% view()
+
+ggplot(comparativo, aes(x = Tamaño, y = Media, fill = Tamaño)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Comparación de Endeudamiento del Activo entre Micro + Pequeña y Grande",
+       x = "Tamaño de Empresa", y = "Valor de Endeudamiento del Activo") +
+  theme_minimal()
+```
+
+En las empresas más pequeñas, el endeudamiento suele ser más alto en comparación con las grandes. Esto se debe a diversas razones, como el limitado acceso a capital, lo que lleva a depender de préstamos y créditos bancarios para mantener operaciones y proyectos. La percepción de riesgo también influye, ya que las empresas pequeñas son vistas como más arriesgadas debido a su tamaño, tiempo en el mercado y recursos limitados. Además, el ciclo de efectivo más extenso, con una demora en la conversión de activos en efectivo, contribuye al incremento del endeudamiento.
+
+#### ¿La liquidez por tipo de compañía es diferente entre aquellas empresas que tienen más de 60 trabajadores directos y que cuenta con 100 a 800 trabajadores administrativos?
+
+```{r}
+levels(as.factor(balance$tipo))
+liquidez_compania <- balance %>%
+  select(tipo, trab_direc, trab_admin, liquidez_corriente) %>%
+  filter(trab_direc > 60, trab_admin >= 100, trab_admin <= 800)
+
+liquidez_compania %>%
+  group_by(tipo) %>%
+  summarise(Promedio3 = mean(liquidez_corriente))
+
+ggplot(liquidez_compania, aes(x = tipo, y = liquidez_corriente, fill = tipo)) +
+  geom_jitter(alpha = 1, color = "gray") +
+  geom_boxplot(alpha = 0.1) +
+  labs(title = "Comparación de Liquidez por Tipo de Compañía",
+       x = "Tipo de Compañía", y = "Liquidez") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+ la liquidez de una empresa varía según su tipo, pero al analizar los datos de liquidez corriente entre diferentes grupos, no se encuentran diferencias significativas. En consecuencia, no se puede afirmar que existan disparidades significativas en la liquidez entre los grupos examinados.
+ 
+#### Top 10 de empresas con mayor apalancamiento.
+```{r}
+top_10_apalancamiento <- balance %>%
+  select(nombre_cia, apalancamiento) %>%
+  arrange(desc(apalancamiento)) %>%
+  head(10)
+```
+Observamos que la mayoría de las empresas con un mayor nivel de apalancamiento se ubican en la provincia de Guayas y se dedican a diversas actividades económicas, tales como: INDUSTRIAS MANUFACTURERAS (C), ACTIVIDADES FINANCIERAS Y DE SEGUROS (K), AGRICULTURA, GANADERÍA, SILVICULTURA Y PESCA (A), COMERCIO AL POR MAYOR Y AL POR MENOR; REPARACIÓN DE VEHÍCULOS AUTOMOTORES Y MOTOCICLETAS (G), EXPLOTACIÓN DE MINAS Y CANTERAS (B) y ACTIVIDADES INMOBILIARIAS (L). Además, en su mayoría, estas empresas son de tamaño activo y se clasifican como microempresas.
+
+####Conclusiones
+
+1. Las empresas pequeñas y micro muestran un mayor endeudamiento de activos en comparación con las grandes empresas, ya que, al encontrarse en una fase de crecimiento comercial, carecen de un respaldo financiero sólido y necesitan buscar financiamiento externo.
+
+2. Se evidencia que solo dos tipos de compañías, ANONIMA y SUCURSAL EXTRANJERA, cumplen con la condición de contar con más de 60 empleados directos y tener entre 100 y 800 trabajadores administrativos. Por lo tanto, la liquidez entre los tipos de empresas difiere bajo esta condición específica.
+
+3. Se concluye que para realizar un análisis más detallado sobre el apalancamiento, sería recomendable llevarlo a cabo según grupos de actividad económica, ya que ciertas industrias pueden requerir un enfoque específico.
